@@ -1,8 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { Link, useNavigate, useLocation } from "react-router-dom";
 import FontLogo from "../assets/categorizrFontLogo.png";
-import { UserCircle, Check, Settings, ExternalLink } from "lucide-react";
-import { MARKETING_URL, MARKETING_HOST } from "../config";
+import { UserCircle, Check, Settings } from "lucide-react";
 import { useData } from "../context/DataContext";
 import { useCurrency } from "../context/CurrencyContext";
 import LogoutConfirmationDialog from "./LogoutConfirmationDialog";
@@ -161,23 +160,8 @@ const Header = () => {
           {showProfileMenu && (
             <div
               role="menu"
-              className="absolute top-12 sm:top-14 md:top-16 right-0 mt-1 bg-white text-black rounded-xl sm:rounded-2xl shadow-lg w-52 sm:w-60 z-50 border overflow-hidden animate-fadeIn dark:bg-slate-800 dark:text-slate-100 dark:border-slate-700"
+              className="absolute top-12 sm:top-14 md:top-16 right-0 mt-1 bg-white text-black rounded-xl sm:rounded-2xl shadow-lg w-44 sm:w-52 z-50 border overflow-hidden animate-fadeIn dark:bg-slate-800 dark:text-slate-100 dark:border-slate-700"
             >
-              <a
-                href={MARKETING_URL}
-                role="menuitem"
-                aria-label={`Visit ${MARKETING_HOST}`}
-                className="flex items-center w-full px-4 py-3 border-b border-gray-100 hover:bg-gray-100 transition-all duration-200 ease-in-out dark:border-slate-700 dark:hover:bg-slate-700 focus:outline-none focus-visible:bg-gray-100 dark:focus-visible:bg-slate-700"
-              >
-                <ExternalLink
-                  size={18}
-                  className="mr-2 text-gray-600 dark:text-slate-400"
-                  aria-hidden="true"
-                />
-                <span className="text-sm font-semibold text-gray-800 truncate dark:text-slate-100">
-                  Visit {MARKETING_HOST}
-                </span>
-              </a>
               <button
                 onClick={handleLogoutClick}
                 className="flex items-center w-full text-left px-4 py-3 hover:bg-gray-100 transition-all duration-200 ease-in-out group dark:hover:bg-slate-700"

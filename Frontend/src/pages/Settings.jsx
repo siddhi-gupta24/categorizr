@@ -47,9 +47,7 @@ import {
   Trash,
   UserCircle,
   Plus,
-  ExternalLink,
 } from "lucide-react";
-import { MARKETING_URL } from "../config";
 
 // Payment logos are served from /public/payment-logos/ so their URLs are
 // identical in dev, staging, and production — no Vite content-hash, no
@@ -614,14 +612,7 @@ const Settings = () => {
         ))}
       </nav>
       {/* Logout at bottom of sidebar */}
-      <div className="px-3 py-4 border-t border-slate-200/80 flex flex-col gap-1">
-        <a
-          href={MARKETING_URL}
-          aria-label="Categorizr Website"
-          className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-900 border border-transparent hover:border-slate-200 transition-all w-full focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
-        >
-          <ExternalLink size={15} aria-hidden="true" /> Categorizr Website
-        </a>
+      <div className="px-3 py-4 border-t border-slate-200/80">
         <button onClick={() => setShowLogoutConfirm(true)}
           className="flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-sm font-medium text-red-500 hover:bg-red-50 border border-transparent hover:border-red-100 transition-all w-full">
           <LogOut size={15} /> Log out
