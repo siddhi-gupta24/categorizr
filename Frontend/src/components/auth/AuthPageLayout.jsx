@@ -56,11 +56,15 @@ const AuthPageLayout = ({ children }) => (
 
     <a
       href={MARKETING_URL}
-      aria-label={`Back to ${MARKETING_HOST}`}
-      className="absolute top-4 left-4 sm:top-5 sm:left-6 z-20 inline-flex items-center gap-1.5 rounded-full bg-white/80 px-3 py-1.5 text-sm font-semibold text-blue-900 shadow-sm backdrop-blur hover:bg-white focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 transition"
+      aria-label="Go back to Categorizr website"
+      className="group absolute top-4 left-4 sm:top-5 sm:left-6 z-20 inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white/80 px-3 py-1.5 text-sm font-medium text-blue-900 shadow-sm backdrop-blur-md hover:bg-white focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-500 transition-colors duration-200 dark:border-slate-700 dark:bg-slate-900/70 dark:text-slate-100 dark:hover:bg-slate-900"
     >
-      <ArrowLeft size={16} aria-hidden="true" />
-      <span>Back to {MARKETING_HOST}</span>
+      <ArrowLeft
+        size={16}
+        aria-hidden="true"
+        className="transition-transform duration-200 group-hover:-translate-x-0.5"
+      />
+      <span>Categorizr</span>
     </a>
 
     <div className="relative z-10 flex flex-col lg:flex-row min-h-screen">
