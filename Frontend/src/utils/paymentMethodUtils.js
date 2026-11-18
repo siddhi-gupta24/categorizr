@@ -1,0 +1,548 @@
+/** Shared helpers for payment method display, edit prefill, and storage. */
+
+/**
+ * When true, dropdowns/filters/settings show only GET /userpaymentmethod records.
+ * Toggle to false to merge receipt-derived and custom payment methods again.
+ */
+export const PAYMENT_METHODS_API_ONLY = true;
+
+export const isPaymentApiRecord = (m) => {
+  if (!m || typeof m !== "object") return false;
+  if (String(m.card_type || "").toLowerCase() === "merchant") return false;
+  const hasCard = (m.card_number || "").toString().trim();
+  const hasIssuer = (m.card_issuer_name || "").toString().trim();
+  return !!(hasCard || hasIssuer || m.id);
+};
+
+export const normalizePaymentMatchKey = (value) =>
+  String(value || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+
+/**
+ * Strip every "*digits" segment, regardless of digit count.
+ *
+ * Stripping must be more permissive than last4 extraction below: records saved
+ * without a card number end up with a junk " *0" suffix, and a 3-4 digit-only
+ * pattern leaves it behind. That leftover then makes callers treat an otherwise
+ * valid brand ("American Express *0") as corrupt and discard it.
+ */
+export const stripLast4Suffix = (value) =>
+  String(value ?? "")
+    .replace(/\s*\*\d+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+
+/**
+ * A real last4 is 3-4 digits. The API stores "0" (and "-") when a record has no
+ * card number, and that "0" is what leaked out as a " *0" display suffix.
+ * Note a genuine card ending 0000 still passes — only the length rule applies.
+ */
+export const normalizeLast4 = (value) => {
+  const digits = String(value ?? "").trim();
+  return /^\d{3,4}$/.test(digits) ? digits : "";
+};
+
+export const parsePaymentDisplay = (value) => {
+  const raw = (value || "").toString().trim();
+  if (!raw) return { issuer: "", last4: "" };
+
+  // Use the last *#### segment as canonical last4 (handles "Other *0009 *0009" from API)
+  const last4Match = raw.match(/\*(\d{3,4})\s*$/);
+  const last4 = normalizeLast4(last4Match ? last4Match[1] : "");
+
+  // Remove every *digits segment so brand/issuer is clean ("Other" not "Other *0009",
+  // "American Express" not "American Express *0").
+  const issuer = stripLast4Suffix(raw);
+
+  return { issuer, last4 };
+};
+
+export const inferCardTypeFromPayment = (value) => {
+  const v = (value || "").toLowerCase();
+  if (v.includes("visa")) return "Visa";
+  if (v.includes("master")) return "MasterCard";
+  if (v.includes("american") || v.includes("amex")) return "American Express";
+  if (v.includes("discover")) return "Discover";
+  if (v.includes("diners")) return "Diners Club";
+  if (v.includes("paypal")) return "PayPal";
+  if (v.includes("debit")) return "Debit Card";
+  if (v.includes("cash")) return "Cash";
+  return "Other";
+};
+
+export const getPaymentBrandFromMap = (paymentName, payCardMap = {}) => {
+  const key = (paymentName || "").toString().trim();
+  if (!key) return "";
+  const fromLocal = payCardMap[key];
+  if (fromLocal) return fromLocal;
+  const inferred = inferCardTypeFromPayment(key);
+  return inferred === "Other" ? "" : inferred;
+};
+
+/** True when issuer is a user-entered custom name (not the card brand alone). */
+export const isCustomCardIssuer = (issuer, brand) => {
+  const iss = (issuer || "").trim();
+  if (!iss) return false;
+  const ik = normalizePaymentMatchKey(iss);
+  const bk = normalizePaymentMatchKey(brand || "");
+  if (ik === bk) return false;
+  if (ik === normalizePaymentMatchKey(inferCardTypeFromPayment(iss))) return false;
+  return true;
+};
+
+/** Persist only custom issuer text; empty when user left issuer blank or it matches brand. */
+export const storedCardIssuerName = (customIssuer, cardType) => {
+  const iss = (customIssuer || "").trim();
+  return isCustomCardIssuer(iss, cardType) ? iss : "";
+};
+
+/** List/dropdown label: brand *last4 when no custom issuer (e.g. "MasterCard *7979"). */
+export const getPaymentMethodListLabel = (paymentName, brand) => {
+  const { issuer, last4 } = parsePaymentDisplay(paymentName);
+  const resolvedBrand = brand || inferCardTypeFromPayment(issuer || paymentName);
+  const base = isCustomCardIssuer(issuer, resolvedBrand)
+    ? issuer
+    : (resolvedBrand || issuer || paymentName);
+  if (!last4) return (base || paymentName);
+  const alreadyHasLast4 =
+    new RegExp(`\\*${last4}\\s*$`).test(base) || base.includes(`*${last4}`);
+  return alreadyHasLast4 ? base : `${base} *${last4}`;
+};
+
+/** API/storage string: custom issuer *last4, or card type *last4 when issuer is blank. */
+export const buildPaymentMethodStorageString = (customIssuer, cardType, last4) => {
+  const issuer = (customIssuer || "").trim();
+  const ct = (cardType || "").trim();
+  const l4 = String(last4 || "").replace(/\D/g, "").slice(0, 4);
+  if (!ct || l4.length < 4) return "";
+  return issuer ? `${issuer} *${l4}` : `${ct} *${l4}`;
+};
+
+export const readPayCardTypeMap = () => {
+  try {
+    return JSON.parse(localStorage.getItem("cat_pay_card_types") || "{}");
+  } catch {
+    return {};
+  }
+};
+
+export const CARD_TYPE_INT_TO_BRAND = {
+  0: "American Express",
+  1: "MasterCard",
+  2: "Visa",
+  3: "Debit Card",
+  4: "Discover",
+  5: "Diners Club",
+  6: "PayPal",
+  7: "Cash",
+  8: "Other",
+};
+
+/** API enum for default_payment_category: "0" = Personal, "1" = Business, "2" = None
+ *  (matches the backend / mobile app). "None" means no default expense type. */
+export const paymentCategoryToApiEnum = (value) => {
+  const v = String(value ?? "").trim().toLowerCase();
+  if (v === "0" || v === "personal") return "0";
+  if (v === "1" || v === "business") return "1";
+  // Blank / "2" / "none" → no default.
+  return "2";
+};
+
+export const paymentCategoryFromApiEnum = (value) => {
+  const v = String(value ?? "").trim();
+  if (v === "0") return "Personal";
+  if (v === "1") return "Business";
+  if (v === "2" || v === "") return "";
+  const lower = v.toLowerCase();
+  if (lower === "personal") return "Personal";
+  if (lower === "business") return "Business";
+  return "";
+};
+
+/** LocalStorage map (payment display string → "Personal"/"Business") override. */
+const readPayExpenseTypeMap = () => {
+  try {
+    return JSON.parse(localStorage.getItem("cat_pay_expense_type") || "{}");
+  } catch {
+    return {};
+  }
+};
+
+/**
+ * The default expense TYPE ("Personal" | "Business" | "") configured for a payment
+ * method. The API record is the source of truth (so a change made on any device —
+ * e.g. iOS — is reflected); the local override map is only a fallback for payment
+ * methods that don't exist in the API yet. `paymentDisplay` is the label like
+ * "Visa *1234".
+ */
+export const getPaymentDefaultExpenseType = (paymentDisplay, apiPaymentMethods = []) => {
+  const name = (paymentDisplay || "").toString().trim();
+  if (!name) return "";
+  const apiMatch = (apiPaymentMethods || []).find((m) =>
+    apiPaymentMethodMatchesLabel(m, name)
+  );
+  // Known API method → trust the server value (never let a stale local override win).
+  if (apiMatch) return paymentCategoryFromApiEnum(apiMatch.default_payment_category);
+  const map = readPayExpenseTypeMap();
+  if (map[name]) return paymentCategoryFromApiEnum(map[name]);
+  return "";
+};
+
+/**
+ * Convert a "Personal"/"Business" expense type to the receipt_category value used on
+ * receipts ("0" = Personal, "1" = Business). Returns "" when there is no default.
+ */
+export const expenseTypeToReceiptCategory = (expenseType) => {
+  const v = (expenseType || "").toString().trim().toLowerCase();
+  if (v === "business" || v === "1") return "1";
+  if (v === "personal" || v === "0") return "0";
+  return "";
+};
+
+export const brandToCardTypeInt = (brand) => {
+  const v = (brand || "").toLowerCase();
+  if (v.includes("american") || v.includes("amex")) return 0;
+  if (v.includes("master")) return 1;
+  if (v.includes("visa")) return 2;
+  if (v.includes("debit")) return 3;
+  if (v.includes("discover")) return 4;
+  if (v.includes("diners")) return 5;
+  if (v.includes("paypal")) return 6;
+  if (v.includes("cash")) return 7;
+  return 8;
+};
+
+export const cardTypeIntToBrand = (cardType) => {
+  const n = parseInt(cardType, 10);
+  return Number.isFinite(n) ? CARD_TYPE_INT_TO_BRAND[n] || "" : "";
+};
+
+/** Admin/API placeholder when no card number is stored yet. */
+export const isPlaceholderCardNumber = (cn) => {
+  const v = (cn ?? "").toString().trim();
+  return !v || v === "-" || v === "0";
+};
+
+/** Normalize payment field from API/local — treats 0, -, and empty as no value. */
+export const normalizePaymentField = (value) => {
+  const s = (value ?? "").toString().trim();
+  if (!s || s === "0" || s === "-" || s === "0*0" || /^0\*\d*$/.test(s)) return "";
+  return s;
+};
+
+/** API sentinel for clearing payment on updateReceiptv1 (empty string is ignored by server). */
+export const CLEAR_PAYMENT_API_VALUE = "0";
+
+export const getLast4FromPaymentApiRecord = (m) => {
+  const cn = (m?.card_number || "").toString().trim();
+  if (isPlaceholderCardNumber(cn)) return "";
+  const legacy = parsePaymentDisplay(cn);
+  if (legacy.last4) return legacy.last4;
+  const digits = cn.replace(/\D/g, "");
+  // Drop anything that isn't a 3-4 digit last4 (e.g. the API's "0") so a card saved
+  // without a number never produces a " *0" suffix downstream.
+  return normalizeLast4(digits.length >= 4 ? digits.slice(-4) : digits);
+};
+
+export const getBrandFromPaymentApiRecord = (m, payCardMap = {}) => {
+  const fromInt = cardTypeIntToBrand(m?.card_type);
+  if (fromInt) return fromInt;
+  const cn = (m?.card_number || "").toString().trim();
+  if (!isPlaceholderCardNumber(cn)) {
+    const fromMap = payCardMap[cn] || payCardMap[cn.toLowerCase()];
+    if (fromMap) return fromMap;
+    const inferred = inferCardTypeFromPayment(cn);
+    if (inferred !== "Other") return inferred;
+  }
+  return inferCardTypeFromPayment(m?.card_issuer_name || "");
+};
+
+/** Display label for a GET /userpaymentmethod record (new + legacy shapes). */
+export const getApiPaymentMethodDisplayName = (m, brandOverride = "") => {
+  const issuerFromApi = (m?.card_issuer_name || "").toString().trim();
+  const last4 = getLast4FromPaymentApiRecord(m);
+  const brand = brandOverride || getBrandFromPaymentApiRecord(m);
+  const cn = (m?.card_number || "").toString().trim();
+
+  // "-" and "0" are server-side placeholder values meaning "no card number".
+  // Treat them the same as empty so we fall through to brand-name display.
+  const cnIsReal = cn && cn !== "-" && cn !== "0";
+
+  if (!issuerFromApi && cnIsReal && cn.includes("*")) {
+    return getPaymentMethodListLabel(cn, brand);
+  }
+
+  if (issuerFromApi) {
+    const raw = last4 ? `${issuerFromApi} *${last4}` : issuerFromApi;
+    return getPaymentMethodListLabel(raw, brand);
+  }
+
+  if (last4) {
+    return getPaymentMethodListLabel(`${brand} *${last4}`, brand);
+  }
+
+  // Use a real card number if present; otherwise show the brand name derived
+  // from card_type so e.g. {card_number:"-", card_type:"7"} → "Cash" not "-".
+  return (cnIsReal ? cn : "") || brand || "";
+};
+
+export const normalizeApiPaymentMethodInput = (input, logoUrl = "", expenseType = "") => {
+  if (input && typeof input === "object" && !Array.isArray(input)) {
+    return {
+      cardIssuerName: (input.cardIssuerName ?? input.card_issuer_name ?? "").trim(),
+      // The brand can live in card_issuer_name OR paymentType — a "Mastercard *8195"
+      // card commonly has a blank issuer. Use the explicit brand if given, else infer
+      // from the issuer, then fall back to paymentType, so a branded card is never
+      // written as "Other" just because its brand sits in paymentType.
+      cardTypeBrand: (() => {
+        const explicit = (input.cardTypeBrand ?? input.card_type_brand ?? input.cardType ?? "").trim();
+        if (explicit) return explicit;
+        const issuer = (input.cardIssuerName ?? input.card_issuer_name ?? "").toString();
+        const fromIssuer = inferCardTypeFromPayment(issuer);
+        if (fromIssuer !== "Other") return fromIssuer;
+        const payType = (input.paymentType ?? input.payment_type ?? "").toString();
+        const fromPay = inferCardTypeFromPayment(payType);
+        return fromPay !== "Other" ? fromPay : "";
+      })(),
+      last4: String(input.last4 ?? input.last_4_digit_card ?? "").replace(/\D/g, "").slice(0, 4),
+      logoUrl: input.logoUrl ?? input.icon_image ?? logoUrl ?? "",
+      expenseType: input.expenseType ?? input.default_payment_category ?? expenseType ?? "",
+    };
+  }
+  const payStr = String(input || "").trim();
+  const { issuer, last4 } = parsePaymentDisplay(payStr);
+  const brand = inferCardTypeFromPayment(payStr);
+  return {
+    cardIssuerName: isCustomCardIssuer(issuer, brand) ? issuer : "",
+    cardTypeBrand: brand,
+    last4,
+    logoUrl: logoUrl || "",
+    expenseType: expenseType || "",
+  };
+};
+
+export const buildApiPaymentMethodPayload = (
+  { id = 0, fk_user_id = 0, cardIssuerName = "", cardTypeBrand = "", last4 = "", logoUrl = "", expenseType = "" },
+  escape = (s) => s
+) => {
+  const brand = (cardTypeBrand || "").trim() || inferCardTypeFromPayment(cardIssuerName);
+  const issuer = storedCardIssuerName(cardIssuerName, brand);
+  const l4 = String(last4 || "").replace(/\D/g, "").slice(0, 4);
+  return {
+    id,
+    fk_user_id,
+    card_number: escape(l4),
+    card_issuer_name: escape(issuer),
+    icon_image: logoUrl || "",
+    card_type: String(brandToCardTypeInt(brand)),
+    default_payment_category: paymentCategoryToApiEnum(expenseType),
+  };
+};
+
+export const paymentMethodPayloadToQuery = (payload) =>
+  new URLSearchParams(
+    Object.fromEntries(
+      Object.entries(payload).map(([k, v]) => [k, v == null ? "" : String(v)])
+    )
+  ).toString();
+
+export const apiPaymentMethodMatchesLabel = (m, label) => {
+  const normalized = normalizePaymentMatchKey(label);
+  if (!normalized) return false;
+  if (normalizePaymentMatchKey(getApiPaymentMethodDisplayName(m)) === normalized) return true;
+  const cn = (m?.card_number || "").toString().trim();
+  // Legacy rows may store the full display string in card_number; bare last-4 values
+  // (e.g. "3333") are shared by many cards and must not match a label.
+  if (cn.includes("*") && normalizePaymentMatchKey(cn) === normalized) return true;
+  return false;
+};
+
+/** Canonical list label (Cash normalization for filters/dropdowns). */
+export const normalizePaymentListLabel = (method) => {
+  const m = (method || "").toString().trim();
+  const lower = m.toLowerCase();
+  if (lower === "cash" || lower.startsWith("cash *")) return "Cash";
+  return m;
+};
+
+export const isValidPaymentMethodLabel = (value) => {
+  const val = (value || "").toString().trim();
+  if (!val || val === "0" || val === "0*0" || /^0\*\d*$/.test(val)) return false;
+  if (val.length < 2) return false;
+  if (/^cash\s*\*\s*0$/i.test(val)) return false;
+  if (/\*\s*0$/.test(val)) return false;
+  return true;
+};
+
+/** e.g. "Cash *0700" — not the canonical "Cash" row. */
+export const isCashPaymentVariant = (name) => {
+  const base = (name || "")
+    .toString()
+    .replace(/\s*\*\s*\d{3,4}\s*$/, "")
+    .trim()
+    .toLowerCase();
+  return base === "cash" && (name || "").toString().trim().toLowerCase() !== "cash";
+};
+
+/**
+ * Single merge for payment method labels — used by DataContext, Settings, Filter,
+ * Add Receipt, and Edit Receipt so every surface shows the same API-backed list.
+ */
+export const mergePaymentMethodLabels = ({
+  baseLabels = [],
+  apiPaymentMethods = [],
+  isHidden = () => false,
+  skipMerchantCardType = true,
+  apiOnly = PAYMENT_METHODS_API_ONLY,
+} = {}) => {
+  const seen = new Map();
+
+  const addLabel = (rawLabel) => {
+    const label = normalizePaymentListLabel((rawLabel || "").toString().trim());
+    if (!isValidPaymentMethodLabel(label) || label === "-") return;
+    if (isCashPaymentVariant(label)) return;
+    if (isHidden(label)) return;
+    const key = normalizePaymentMatchKey(label);
+    if (seen.has(key)) return;
+    seen.set(key, label);
+  };
+
+  if (!apiOnly) {
+    (baseLabels || []).forEach(addLabel);
+  }
+  (apiPaymentMethods || []).forEach((m) => {
+    if (skipMerchantCardType && String(m?.card_type || "").toLowerCase() === "merchant") {
+      return;
+    }
+    addLabel(getApiPaymentMethodDisplayName(m));
+  });
+
+  return Array.from(seen.values()).sort((a, b) => a.localeCompare(b));
+};
+
+/**
+ * Dedupe API payment-method RECORDS by their normalized display name.
+ *
+ * Surfaces that render records (e.g. the Settings list) need one row per card even when
+ * the backend stored the same card twice — e.g. card_number "*7777" and "7777", which both
+ * resolve to the same display name "Bnak 7 *7777". The dropdowns/Filter already collapse
+ * these (they dedupe by display name), so this makes Settings consistent with them.
+ *
+ * Keeps the FIRST record for each name (same record the dropdowns match first) and records
+ * the ids of the duplicates it dropped, so a single delete can remove every stored copy.
+ * Returns [{ record, name, apiId, duplicateIds }].
+ */
+export const dedupeApiPaymentMethodRecords = (
+  apiPaymentMethods = [],
+  { isHidden = () => false } = {}
+) => {
+  const byName = new Map();
+  (apiPaymentMethods || []).forEach((m) => {
+    if (!isPaymentApiRecord(m)) return;
+    const name = getApiPaymentMethodDisplayName(m);
+    if (!name || isHidden(name)) return;
+    const key = normalizePaymentMatchKey(name);
+    if (!key) return;
+    const id = m?.id ?? m?.payment_method_id ?? m?.fk_payment_method_id ?? null;
+    const existing = byName.get(key);
+    if (!existing) {
+      byName.set(key, { record: m, name, apiId: id, duplicateIds: [] });
+    } else if (id != null && String(id) !== String(existing.apiId)) {
+      existing.duplicateIds.push(id);
+    }
+  });
+  return Array.from(byName.values());
+};
+
+/** brand|last4 signature for duplicate detection (matches iOS / Settings). */
+export const getPaymentSignature = (paymentName, fallbackCardType = "", payCardMap = {}) => {
+  const { last4 } = parsePaymentDisplay(paymentName);
+  const key = (paymentName || "").toString().trim();
+  let brand = (fallbackCardType || "").trim();
+  if (!brand && key) {
+    const fromLocal = payCardMap[key] || payCardMap[normalizePaymentMatchKey(key)];
+    if (fromLocal) brand = fromLocal;
+  }
+  if (!brand && key) {
+    const inferred = inferCardTypeFromPayment(key);
+    if (inferred !== "Other") brand = inferred;
+  }
+  if (!brand && key) {
+    const { issuer: issuerOnly } = parsePaymentDisplay(key);
+    if (issuerOnly) {
+      const fromIssuer =
+        payCardMap[issuerOnly] || payCardMap[normalizePaymentMatchKey(issuerOnly)];
+      if (fromIssuer) brand = fromIssuer;
+    }
+  }
+  const normalizedBrand = (brand || "").toString().trim().toLowerCase();
+  const normalizedLast4 = (last4 || "").toString().replace(/\D/g, "").slice(0, 4);
+  if (!normalizedBrand || normalizedLast4.length !== 4) return "";
+  return `${normalizedBrand}|${normalizedLast4}`;
+};
+
+export const getApiPaymentMethodSignature = (m) => {
+  const brand = getBrandFromPaymentApiRecord(m);
+  const last4 = getLast4FromPaymentApiRecord(m);
+  const normalizedBrand = (brand || "").toString().trim().toLowerCase();
+  const normalizedLast4 = (last4 || "").toString().replace(/\D/g, "").slice(0, 4);
+  if (!normalizedBrand || normalizedLast4.length !== 4) return "";
+  return `${normalizedBrand}|${normalizedLast4}`;
+};
+
+export const getApiPaymentMethodCacheKey = (m) => {
+  if (!m || typeof m !== "object") return String(m || "").trim().toLowerCase();
+  const id = m.id ?? m.payment_method_id ?? m.fk_payment_method_id;
+  if (id != null && String(id) !== "" && String(id) !== "0") {
+    return `id:${String(id)}`;
+  }
+  const issuer = (m.card_issuer_name || m.cardIssuerName || "").trim().toLowerCase();
+  const last4 = getLast4FromPaymentApiRecord(m);
+  const cardType = String(m.card_type ?? "").trim();
+  if (issuer || last4) return `${issuer}|${last4}|${cardType}`;
+  const brand = (cardTypeIntToBrand(cardType) || "").trim().toLowerCase();
+  if (brand) return `brand:${brand}|${cardType}`;
+  const cn = (m.card_number || "").toString().trim();
+  if (!isPlaceholderCardNumber(cn)) return cn.toLowerCase();
+  return `type:${cardType || "unknown"}`;
+};
+
+/** Field updates that fully clear payment method on a receipt (all API/local aliases). */
+export const getClearPaymentMethodUpdates = () => ({
+  paymentType: "",
+  payment_type: "",
+  card_issuer_name: "",
+  cardIssuerName: "",
+  last_4_digit_card: "",
+  last4DigitCard: "",
+  paymentBrand: "",
+  payment_method_name: "",
+  payment_logo_url: "",
+  paymentLogoUrl: "",
+});
+
+/** Values the receipt API expects when clearing payment on update (not add). */
+export const getClearPaymentMethodApiPayload = () => ({
+  paymentType: CLEAR_PAYMENT_API_VALUE,
+  card_issuer_name: CLEAR_PAYMENT_API_VALUE,
+  last_4_digit_card: CLEAR_PAYMENT_API_VALUE,
+});
+
+/** Keep snake_case and camelCase payment fields in sync after reads/updates. */
+export const syncReceiptPaymentFieldAliases = (receipt) => {
+  if (!receipt || typeof receipt !== "object") return receipt;
+  const paymentType = normalizePaymentField(receipt.paymentType ?? receipt.payment_type);
+  const cardIssuerName = normalizePaymentField(receipt.card_issuer_name ?? receipt.cardIssuerName);
+  const last4 = normalizePaymentField(receipt.last_4_digit_card ?? receipt.last4DigitCard);
+  return {
+    ...receipt,
+    paymentType,
+    payment_type: paymentType,
+    card_issuer_name: cardIssuerName,
+    cardIssuerName,
+    last_4_digit_card: last4,
+    last4DigitCard: last4,
+  };
+};

@@ -1,0 +1,251 @@
+import {
+  buildReceiptTipTaxEntry,
+  filterNonTipReceiptTaxValues,
+  findTipLineInReceiptTaxValues,
+} from "../utils/taxTypeUtils";
+import { calendarUnixToMobileUnix, productDateToApiReceiptDate } from "../utils/receiptDate";
+
+const BASE_URL = "/api";
+
+const authHeaders = () => ({
+  "Content-Type": "application/json",
+  Accesstoken: localStorage.getItem("token"),
+});
+
+const toPositiveInt = (value) => {
+  const n = parseInt(value, 10);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+};
+
+const toInt = (value, fallback = 0) => {
+  const n = parseInt(value, 10);
+  return Number.isFinite(n) ? n : fallback;
+};
+
+const isForwardSuccessResponse = (data) => {
+  if (!data) return true;
+  if (typeof data === "string") {
+    return /success|ok|forward/i.test(data);
+  }
+  if (typeof data !== "object") return false;
+  if (data.originalUsername != null) return true;
+  if (
+    typeof data.message === "string" &&
+    /success|forward|sent/i.test(data.message)
+  ) {
+    return true;
+  }
+  const code = data.code != null ? String(data.code) : "";
+  if (code && code !== "0" && code !== "200") return false;
+  if (data.message && /fail|error|invalid|not found/i.test(String(data.message))) {
+    return false;
+  }
+  return !("code" in data && "message" in data);
+};
+
+const parseResponseBody = async (res) => {
+  const text = await res.text();
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+};
+
+const inferLast4 = (paymentType, last4) => {
+  const raw = (last4 || "").toString().trim();
+  if (raw && raw !== "0") return raw;
+  const pt = (paymentType || "").toString();
+  if (!pt.includes("*")) return "";
+  const matches = [...pt.matchAll(/\*(\d{3,4})/g)];
+  return matches.length > 0 ? matches[matches.length - 1][1] : "";
+};
+
+const getReceiptTaxValues = (receipt) => {
+  if (Array.isArray(receipt?.receipt_tax_values)) return receipt.receipt_tax_values;
+  if (Array.isArray(receipt?.receiptTaxValues)) return receipt.receiptTaxValues;
+  return [];
+};
+
+// The browser sends the typed text. api/user/forwardreceiptv2 adapts apostrophes
+// for the legacy PHP query before they reach emailserver.
+const buildForwardTaxValues = (receipt, recipientUserId) => {
+  const recipientId = toPositiveInt(recipientUserId);
+  const allTaxValues = getReceiptTaxValues(receipt);
+  const existingTipLine =
+    findTipLineInReceiptTaxValues(allTaxValues) ||
+    findTipLineInReceiptTaxValues(receipt._sourceReceiptTaxValues);
+  const tipAmount =
+    parseFloat(receipt.tip) ||
+    (existingTipLine ? parseFloat(existingTipLine.tax_amount) : 0) ||
+    0;
+  const subtotal =
+    parseFloat(receipt.subtotal) ||
+    (() => {
+      const total =
+        parseFloat(receipt.purchasePrice ?? receipt.purchase_price ?? 0) || 0;
+      const nonTipTaxSum = filterNonTipReceiptTaxValues(allTaxValues).reduce(
+        (sum, t) => sum + (parseFloat(t.tax_amount) || 0),
+        0,
+      );
+      return Math.max(0, total - tipAmount - nonTipTaxSum);
+    })();
+
+  const taxLines = filterNonTipReceiptTaxValues(allTaxValues).map((t) => ({
+    id: 0,
+    fk_user_id: recipientId || toPositiveInt(t.fk_user_id),
+    fk_receipt_id: 0,
+    fk_tax_id: toInt(t.fk_tax_id),
+    tax_name: (t.tax_name || "").toString(),
+    tax_rate: (t.tax_rate ?? "0").toString(),
+    tax_amount: (parseFloat(t.tax_amount) || 0).toString(),
+    created: 0,
+    updated: 0,
+  }));
+
+  const tipLine = buildReceiptTipTaxEntry({
+    tipAmount,
+    subtotal,
+    taxDefinitions: [],
+    existingTipLine,
+    fk_receipt_id: 0,
+    fk_user_id: recipientId,
+  });
+  if (tipLine) {
+    taxLines.push({
+      ...tipLine,
+      id: 0,
+      fk_user_id: recipientId || toPositiveInt(tipLine.fk_user_id),
+      fk_receipt_id: 0,
+      created: 0,
+      updated: 0,
+    });
+  }
+
+  return taxLines;
+};
+
+/** UserReceipt body for POST /user/forwardreceiptv2. Sender from Accesstoken; recipient via forward_to_user_id.
+ *  opts.paymentCategoryEnum ("0" Personal | "1" Business | "2" None) overrides the receipt's own
+ *  payment_category_type — the recipient reads this field to set the received card's default expense
+ *  type, so it must carry the SENDER's payment-method default, not the receipt's (often 0) value. */
+export const buildForwardPayload = (receipt, recipientUserId, opts = {}) => {
+  const sourceReceiptId = toPositiveInt(receipt.id);
+  const recipientId = toPositiveInt(recipientUserId);
+  const paymentType = (receipt.paymentType || receipt.payment_type || "")
+    .toString()
+    .trim();
+  const basePaymentType = paymentType.replace(/\s*\*\d{3,4}/g, "").trim();
+  const last4 = inferLast4(
+    paymentType,
+    receipt.last_4_digit_card || receipt.last4DigitCard
+  );
+
+  const mobileProductDate = calendarUnixToMobileUnix(receipt.product_date);
+
+  return {
+    id: sourceReceiptId,
+    forward_to_user_id: recipientId,
+    storeName: receipt.storeName || receipt.store_name || "",
+    product_name: receipt.product_name || receipt.productName || "",
+    emailAttachment: (receipt.emailAttachment || "0").toString(),
+    purchasePrice: (receipt.purchasePrice ?? receipt.purchase_price ?? "0").toString(),
+    total_amount: (
+      receipt.total_amount ??
+      receipt.purchasePrice ??
+      receipt.purchase_price ??
+      "0"
+    ).toString(),
+    payment_category_type:
+      opts.paymentCategoryEnum != null && opts.paymentCategoryEnum !== ""
+        ? toInt(opts.paymentCategoryEnum)
+        : toInt(receipt.payment_category_type),
+    // The copy on account B starts unread. Never copy the sender's status
+    // (usually 1, because they already opened their own receipt) — that made
+    // the recipient's highlight disappear a few seconds later on every device,
+    // as if someone had opened it. status stays 0 until a device actually opens it.
+    status: 0,
+    is_verify: 0,
+    is_draft: 0,
+    paymentType: basePaymentType || paymentType,
+    last_4_digit_card: last4,
+    card_issuer_name: receipt.card_issuer_name || receipt.cardIssuerName || "",
+    payment_logo_url: receipt.paymentDisplay?.logoUrl || receipt.payment_logo_url || receipt.paymentLogoUrl || "",
+    // Always the receipt BEING forwarded (the sender's own id), even when that
+    // receipt was itself received. forwardreceiptv2 marks receipt_forwarded=1 on
+    // this id, so a received receipt that is then forwarded correctly shows BOTH
+    // "Forwarded" and "Received". It also matches how the rest of the app keys the
+    // forward chain (recipient copies are found by fk_original_receipt_id === this
+    // id). Previously a chain-forward sent the upstream root here, so the backend
+    // marked someone else's receipt and the sender's badge never appeared.
+    fk_original_receipt_id: String(sourceReceiptId),
+    fk_forward_from_receipt_id: String(sourceReceiptId),
+    receipt_category: toInt(receipt.receipt_category),
+    product_date: mobileProductDate,
+    // Raw calendar day ("YYYY-MM-DD", or "0") so the recipient sees the same date on
+    // every platform regardless of timezone.
+    receipt_date: productDateToApiReceiptDate(receipt.product_date),
+    expense_type: receipt.expense_type || receipt.expenseType || "",
+    expenseType: receipt.expense_type || receipt.expenseType || "",
+    receipt_image: (receipt.receipt_image || receipt.receiptImage || "0").toString(),
+    store_image: receipt.store_image || receipt.storeImage || "",
+    receipt_tag: receipt.receipt_tag || "0,0,0,0,0,0,0",
+    notes: receipt.notes || "",
+    // Marks the sender's SOURCE receipt as forwarded. forwardreceiptv2 reads this
+    // flag and sets receipt_forwarded=1 on fk_original_receipt_id (now always the
+    // receipt being forwarded, see above) — the same path iOS/Android use, so the
+    // "Forwarded" badge persists and shows on every platform. The recipient's new
+    // copy is NOT affected (the server doesn't write this column on the inserted
+    // copy; it stays "0"). This is the ONLY path that marks the source:
+    // updateReceiptv1 silently ignores receipt_forwarded.
+    receipt_forwarded: "1",
+    // Match product_date so mobile date heuristics never shift the forwarded day
+    create_date: String(
+      mobileProductDate || Math.floor(Date.now() / 1000),
+    ),
+    receipt_tax_values: buildForwardTaxValues(receipt, recipientId),
+  };
+};
+
+export const forwardReceiptToUser = async (receipt, recipientUserId, senderUser, opts = {}) => {
+  const token = localStorage.getItem("token");
+  if (!token) return { ok: false, error: "Missing token" };
+  if (!receipt?.id) return { ok: false, error: "Receipt not saved yet." };
+
+  const recipientId = toPositiveInt(recipientUserId);
+  const senderId =
+    toPositiveInt(localStorage.getItem("fk_user_id")) ||
+    toPositiveInt(senderUser?.id);
+
+  if (!recipientId) {
+    return { ok: false, error: "Invalid recipient. Please try again." };
+  }
+  if (senderId && recipientId === senderId) {
+    return { ok: false, error: "You cannot forward a receipt to yourself." };
+  }
+
+  const body = buildForwardPayload(receipt, recipientId, opts);
+
+  try {
+    const res = await fetch(`${BASE_URL}/user/forwardreceiptv2`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify(body),
+    });
+    const data = await parseResponseBody(res);
+
+    if (res.ok && isForwardSuccessResponse(data)) {
+      return { ok: true, data, error: null };
+    }
+
+    const error =
+      (data && typeof data === "object" && data.message) ||
+      (typeof data === "string" && data.trim()) ||
+      `Forward failed (${res.status})`;
+
+    return { ok: false, error };
+  } catch (e) {
+    return { ok: false, error: e.message || "Forward failed" };
+  }
+};

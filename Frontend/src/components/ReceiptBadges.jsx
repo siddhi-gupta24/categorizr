@@ -1,0 +1,40 @@
+
+const ReceiptBadges = ({ receipt, isToBeVerified = false, isNewForwarded = false }) => {
+  const status = receipt.badgeStatus;
+  const isQuickbooksLinked = receipt.quickbooksLinked;
+
+  if (!status && !isQuickbooksLinked && !isToBeVerified && !isNewForwarded) return null;
+
+  return (
+    <div className="flex gap-1 mb-2 flex-wrap">
+      {isToBeVerified && (
+        <span className="bg-slate-500 text-slate-50 text-xs font-bold px-3 py-1 rounded-full tracking-wide">
+          Needs Review
+        </span>
+      )}
+      {isNewForwarded && (
+        <span className="bg-blue-50 text-blue-600 text-xs font-bold px-2 py-1 rounded-full border border-blue-400 uppercase tracking-wide">
+          New
+        </span>
+      )}
+      {(status === "both" || status === "forwarded") && (
+        <span className="bg-white text-green-500 text-xs font-semibold px-2 py-1 rounded-full border border-green-500">
+          Forwarded
+        </span>
+      )}
+      {(status === "both" || status === "received") && (
+        <span className="bg-white text-blue-500 text-xs font-semibold px-2 py-1 rounded-full border border-blue-500">
+          Received
+        </span>
+      )}
+      {isQuickbooksLinked && (
+        <span className="bg-white text-emerald-600 text-xs font-semibold px-2 py-1 rounded-full border border-emerald-500 flex items-center gap-1">
+          <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+          <span>QuickBooks</span>
+        </span>
+      )}
+    </div>
+  );
+};
+
+export default ReceiptBadges;

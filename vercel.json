@@ -1,0 +1,43 @@
+{
+  "version": 2,
+  "installCommand": "rm -rf node_modules Frontend/node_modules Frontend/package-lock.json && npm install && cd Frontend && npm install @rollup/rollup-linux-x64-gnu @swc/core-linux-x64-gnu --no-save",
+  "buildCommand": "npm run build",
+  "outputDirectory": "Frontend/dist",
+  "rewrites": [
+    {
+      "source": "/api/imageproxy",
+      "destination": "https://categorizr-chatbot-staging.onrender.com/api/imageproxy"
+    },
+    {
+      "source": "/api/integrations/:path*",
+      "destination": "https://categorizr-chatbot-staging.onrender.com/api/integrations/:path*"
+    },
+    {
+      "source": "/api/:path*",
+      "destination": "https://categorizr.com/emailserver/api/:path*"
+    },
+    {
+      "source": "/imagesearch",
+      "destination": "https://categorizr.com/imagesearchv2.php"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/assets/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=31536000, immutable" }
+      ]
+    },
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        { "key": "X-Content-Type-Options", "value": "nosniff" }
+      ]
+    }
+  ]
+}
+

@@ -1,0 +1,51 @@
+{
+  "name": "frontend",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "lint": "eslint .",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "date-fns": "^4.1.0",
+    "formik": "^2.4.6",
+    "framer-motion": "^12.23.12",
+    "heic2any": "^0.0.4",
+    "html2pdf.js": "^0.14.0",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.2",
+    "jszip": "^3.10.1",
+    "lucide-react": "^0.525.0",
+    "pdfjs-dist": "^5.4.296",
+    "qrcode.react": "^4.2.0",
+    "react": "^19.1.0",
+    "react-date-range": "^2.0.1",
+    "react-dom": "^19.1.0",
+    "react-router-dom": "^7.6.3",
+    "react-slick": "^0.30.3",
+    "react-spinners": "^0.17.0",
+    "slick-carousel": "^1.8.1",
+    "swiper": "^12.1.4",
+    "tesseract.js": "^7.0.0",
+    "xlsx": "^0.18.5",
+    "yup": "^1.6.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.29.0",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "@vitejs/plugin-react-swc": "^3.10.2",
+    "autoprefixer": "^10.4.21",
+    "eslint": "^9.29.0",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "eslint-plugin-react-refresh": "^0.4.20",
+    "globals": "^16.2.0",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^3.4.17",
+    "vite": "^7.0.0"
+  },
+  "proxy": "https://categorizr.com"
+}

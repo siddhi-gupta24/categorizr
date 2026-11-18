@@ -1,0 +1,284 @@
+/* @tailwind base;
+@tailwind components;
+@tailwind utilities; */
+
+html, body, #root {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  /* Disable the browser's horizontal swipe back/forward navigation gesture so a
+     trackpad/mouse swipe to the right never navigates away and closes open screens
+     (e.g. the Add/Edit Receipt modal). Vertical scrolling is unaffected. */
+  overscroll-behavior-x: contain;
+}
+
+/* Prevent iOS Safari auto-zoom on input focus.
+   iOS zooms in whenever a focused input's font-size is below 16px (Tailwind
+   text-sm = 14px, text-xs = 12px). Setting 16px here stops the zoom without
+   disabling pinch-zoom (which would be an accessibility violation). */
+@media screen and (max-width: 767px) {
+  input[type="text"],
+  input[type="email"],
+  input[type="password"],
+  input[type="number"],
+  input[type="tel"],
+  input[type="search"],
+  input[type="date"],
+  input[type="time"],
+  input[type="url"],
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+}
+
+/* Date inputs: iOS Safari gives them an intrinsic width and centers the value, so
+   they overflow their card and look misaligned. Keep them inside the container and
+   left-aligned like the other fields. */
+input[type="date"] {
+  min-width: 0;
+  max-width: 100%;
+  text-align: left;
+}
+input[type="date"]::-webkit-date-and-time-value {
+  text-align: left;
+  min-height: 1.5em;
+}
+@supports (-webkit-touch-callout: none) {
+  input[type="date"] {
+    -webkit-appearance: none;
+    appearance: none;
+    min-height: 2.25rem;
+  }
+}
+
+/* Custom dropdown arrow inset from the right edge (native arrow sits flush). */
+select.select-arrow {
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  padding-right: 2.25rem;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.75rem center;
+  background-size: 1rem;
+}
+
+body {
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+  line-height: 1.5;
+  overflow-x: hidden;
+  overscroll-behavior-x: contain;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-fadeIn {
+  animation: fadeIn 0.2s ease-out;
+}
+
+/* Report dropdown open animation (desktop + mobile) */
+@keyframes reportDropdownIn {
+  from { opacity: 0; transform: translateY(-8px) scale(0.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@-webkit-keyframes reportDropdownIn {
+  from { opacity: 0; -webkit-transform: translateY(-8px) scale(0.96); transform: translateY(-8px) scale(0.96); }
+  to { opacity: 1; -webkit-transform: translateY(0) scale(1); transform: translateY(0) scale(1); }
+}
+.animate-report-dropdown {
+  -webkit-animation: reportDropdownIn 0.2s ease-out;
+  animation: reportDropdownIn 0.2s ease-out;
+  will-change: transform, opacity;
+}
+
+/* Report dropdown closing (no blink) */
+@keyframes reportDropdownOut {
+  from { opacity: 1; transform: translateY(0) scale(1); }
+  to { opacity: 0; transform: translateY(-6px) scale(0.98); }
+}
+@-webkit-keyframes reportDropdownOut {
+  from { opacity: 1; -webkit-transform: translateY(0) scale(1); transform: translateY(0) scale(1); }
+  to { opacity: 0; -webkit-transform: translateY(-6px) scale(0.98); transform: translateY(-6px) scale(0.98); }
+}
+.report-dropdown-closing {
+  -webkit-animation: reportDropdownOut 0.15s ease-in forwards;
+  animation: reportDropdownOut 0.15s ease-in forwards;
+  will-change: transform, opacity;
+}
+
+/* Ensure report dropdown is above sticky/header on mobile */
+.report-dropdown-panel {
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+}
+
+/* ===== RESPONSIVE UTILITIES ===== */
+
+/* Container responsive padding */
+.responsive-container {
+  padding-left: 1rem;
+  padding-right: 1rem;
+}
+
+@media (min-width: 640px) {
+  .responsive-container {
+    padding-left: 1.5rem;
+    padding-right: 1.5rem;
+  }
+}
+
+@media (min-width: 1024px) {
+  .responsive-container {
+    padding-left: 2rem;
+    padding-right: 2rem;
+  }
+}
+
+/* Responsive text sizes */
+.responsive-title {
+  font-size: 1.5rem;
+  line-height: 2rem;
+}
+
+@media (min-width: 640px) {
+  .responsive-title {
+    font-size: 2rem;
+    line-height: 2.5rem;
+  }
+}
+
+@media (min-width: 1024px) {
+  .responsive-title {
+    font-size: 2.5rem;
+    line-height: 3rem;
+  }
+}
+
+/* Responsive subtitle */
+.responsive-subtitle {
+  font-size: 1rem;
+}
+
+@media (min-width: 640px) {
+  .responsive-subtitle {
+    font-size: 1.25rem;
+  }
+}
+
+@media (min-width: 1024px) {
+  .responsive-subtitle {
+    font-size: 1.5rem;
+  }
+}
+
+/* Responsive grid for receipts */
+.responsive-receipt-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1rem;
+}
+
+@media (min-width: 768px) {
+  .responsive-receipt-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (min-width: 1280px) {
+  .responsive-receipt-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+/* Mobile-first button styles */
+.responsive-btn {
+  padding: 0.5rem 1rem;
+  font-size: 0.875rem;
+  border-radius: 9999px;
+}
+
+@media (min-width: 640px) {
+  .responsive-btn {
+    padding: 0.5rem 1.25rem;
+    font-size: 0.875rem;
+  }
+}
+
+/* Responsive search input */
+.responsive-search {
+  width: 100%;
+  max-width: 100%;
+}
+
+@media (min-width: 640px) {
+  .responsive-search {
+    width: 200px;
+  }
+}
+
+@media (min-width: 1024px) {
+  .responsive-search {
+    width: 240px;
+  }
+}
+
+/* Hide on mobile, show on tablet+ */
+.hide-mobile {
+  display: none;
+}
+
+@media (min-width: 768px) {
+  .hide-mobile {
+    display: block;
+  }
+}
+
+/* Show on mobile, hide on tablet+ */
+.show-mobile {
+  display: block;
+}
+
+@media (min-width: 768px) {
+  .show-mobile {
+    display: none;
+  }
+}
+
+/* Responsive modal overlay */
+.modal-overlay {
+  padding: 0;
+}
+
+@media (min-width: 640px) {
+  .modal-overlay {
+    padding: 1rem;
+  }
+}
+
+@media (min-width: 1024px) {
+  .modal-overlay {
+    padding: 2rem;
+  }
+}
+
+/* Responsive sticky header */
+.sticky-header {
+  position: sticky;
+  top: 56px;
+  z-index: 40;
+}
+
+@media (min-width: 768px) {
+  .sticky-header {
+    top: 64px;
+  }
+}
+
+@media (min-width: 1024px) {
+  .sticky-header {
+    top: 100px;
+  }
+}

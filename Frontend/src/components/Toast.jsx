@@ -1,0 +1,94 @@
+import { useEffect, useRef } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { CheckCircle, XCircle, AlertCircle, X } from "lucide-react";
+
+const Toast = ({ message, type = "success", isVisible, onClose, duration = 3000, actionUrl, actionLabel, actionUrl2, actionLabel2 }) => {
+  // Read onClose through a ref so a parent that passes a fresh onClose on every
+  // render (and re-renders often, e.g. the live Split screen) doesn't keep
+  // resetting the auto-hide timer — which made toasts linger far past `duration`.
+  // The timer resets only when the toast itself changes (visibility/message/duration).
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  useEffect(() => {
+    if (isVisible && duration > 0) {
+      const timer = setTimeout(() => {
+        onCloseRef.current?.();
+      }, duration);
+      return () => clearTimeout(timer);
+    }
+  }, [isVisible, duration, message]);
+
+  const icons = {
+    success: <CheckCircle size={20} className="text-green-500" />,
+    error: <XCircle size={20} className="text-red-500" />,
+    warning: <AlertCircle size={20} className="text-yellow-500" />,
+    info: <AlertCircle size={20} className="text-blue-500" />,
+  };
+
+  const bgColors = {
+    success: "bg-green-50 border-green-200",
+    error: "bg-red-50 border-red-200",
+    warning: "bg-yellow-50 border-yellow-200",
+    info: "bg-blue-50 border-blue-200",
+  };
+
+  const textColors = {
+    success: "text-green-800",
+    error: "text-red-800",
+    warning: "text-yellow-800",
+    info: "text-blue-800",
+  };
+
+  return (
+    <AnimatePresence>
+      {isVisible && (
+        <motion.div
+          initial={{ opacity: 0, y: -50, x: "-50%" }}
+          animate={{ opacity: 1, y: 0, x: "-50%" }}
+          exit={{ opacity: 0, y: -50, x: "-50%" }}
+          transition={{ duration: 0.3, ease: "easeOut" }}
+          className={`fixed top-20 left-1/2 z-[100] flex items-center gap-3 px-4 py-3 rounded-lg border shadow-lg ${bgColors[type]}`}
+        >
+          {icons[type]}
+          <div className="flex flex-col gap-1">
+            <span className={`font-medium text-sm ${textColors[type]}`}>{message}</span>
+            {((actionUrl && actionLabel) || (actionUrl2 && actionLabel2)) && (
+              <div className="flex items-center gap-3">
+                {actionUrl && actionLabel && (
+                  <a
+                    href={actionUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={`text-xs underline font-semibold ${textColors[type]} hover:opacity-80`}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {actionLabel}
+                  </a>
+                )}
+                {actionUrl2 && actionLabel2 && (
+                  <a
+                    href={actionUrl2}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className={`text-xs underline font-semibold ${textColors[type]} hover:opacity-80`}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {actionLabel2}
+                  </a>
+                )}
+              </div>
+            )}
+          </div>
+          <button aria-label="Dismiss notification"
+            onClick={onClose}
+            className="ml-2 p-1 hover:bg-black/5 rounded-full transition-colors"
+          >
+            <X size={16} className="text-gray-500" />
+          </button>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+};
+
+export default Toast;

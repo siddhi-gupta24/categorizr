@@ -1,0 +1,42 @@
+{
+  "version": 2,
+  "installCommand": "npm install --include=dev",
+  "buildCommand": "npm run build",
+  "outputDirectory": "dist",
+  "rewrites": [
+    {
+      "source": "/api/imageproxy",
+      "destination": "https://categorizr-chatbot-staging.onrender.com/api/imageproxy"
+    },
+    {
+      "source": "/api/integrations/:path*",
+      "destination": "https://categorizr-chatbot-staging.onrender.com/api/integrations/:path*"
+    },
+    {
+      "source": "/api/:path*",
+      "destination": "https://categorizr.com/emailserver/api/:path*"
+    },
+    {
+      "source": "/imagesearch",
+      "destination": "https://categorizr.com/imagesearchv2.php"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ],
+  "headers": [
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        { "key": "X-Content-Type-Options", "value": "nosniff" }
+      ]
+    },
+    {
+      "source": "/((?!assets/).*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-cache, must-revalidate" }
+      ]
+    }
+  ]
+}

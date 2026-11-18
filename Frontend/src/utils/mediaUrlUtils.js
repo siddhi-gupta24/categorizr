@@ -1,0 +1,548 @@
+import { unproxyImageUrl } from "../api/Axios";
+
+export const PDF_PROXY_BASE =
+  "https://categorizr.com/emailserver/pdf_proxy_base.php?url=";
+
+/** Comma between URLs only — not commas inside a path (e.g. "Feb 27, 2026.pdf"). */
+const MEDIA_URL_SEPARATOR = /,(?=\s*https?:\/\/)/i;
+
+const INVALID_VALUES = new Set(["0", "null", "undefined", ""]);
+
+export function normalizeMediaUrl(url) {
+  const raw = unproxyImageUrl((url || "").toString().trim());
+  if (!raw || INVALID_VALUES.has(raw.toLowerCase()) || raw.startsWith("blob:")) {
+    return "";
+  }
+  try {
+    const fixed = raw.replace(/%25([0-9A-Fa-f]{2})/g, "%$1");
+    return encodeURI(decodeURI(fixed));
+  } catch {
+    return encodeURI(raw);
+  }
+}
+
+export function mediaUrlsEqual(a, b) {
+  const na = normalizeMediaUrl(a);
+  const nb = normalizeMediaUrl(b);
+  return !!na && !!nb && na === nb;
+}
+
+export function splitMediaField(value) {
+  if (!value || typeof value !== "string") return [];
+  return value
+    .split(MEDIA_URL_SEPARATOR)
+    .map((part) => part.trim())
+    .filter((part) => part && !INVALID_VALUES.has(part.toLowerCase()))
+    .map((part) => normalizeMediaUrl(part))
+    .filter(Boolean);
+}
+
+export function buildCombinedMediaField(sources) {
+  const urls = [];
+  const pushUrl = (candidate) => {
+    const normalized = normalizeMediaUrl(candidate);
+    if (!normalized || urls.includes(normalized)) return;
+    urls.push(normalized);
+  };
+
+  sources.forEach((source) => {
+    if (Array.isArray(source)) {
+      source.forEach((item) => pushUrl(item));
+      return;
+    }
+    splitMediaField(source).forEach((item) => pushUrl(item));
+  });
+
+  if (urls.length === 0) return "0";
+  return urls.join(",");
+}
+
+/** Replace one normalized URL inside a comma-separated media field. */
+export function replaceUrlInMediaCsv(csv, normalizedOld, replacement) {
+  if (!csv || typeof csv !== "string" || csv === "0") return csv;
+
+  const rawParts = csv
+    .split(MEDIA_URL_SEPARATOR)
+    .map((p) => p.trim())
+    .filter((p) => p && !INVALID_VALUES.has(p.toLowerCase()));
+
+  let hit = false;
+  const next = rawParts.map((p) => {
+    const n = normalizeMediaUrl(p);
+    if (n && normalizedOld && n === normalizedOld) {
+      hit = true;
+      return replacement;
+    }
+    return p;
+  });
+
+  if (!hit) return csv;
+  return next.join(",");
+}
+
+/** Remove one URL from a receipt's media fields (web save shape: images in emailAttachment). */
+export function removeUrlFromReceiptMedia(receipt, urlToRemove) {
+  const remaining = collectReceiptMediaUrls(receipt).filter(
+    (u) => !mediaUrlsEqual(u, urlToRemove)
+  );
+  return {
+    receipt_image: "0",
+    emailAttachment: buildCombinedMediaField(remaining),
+  };
+}
+
+const SAFE_UPLOAD_EXTENSIONS = new Set([
+  "jpg",
+  "jpeg",
+  "png",
+  "gif",
+  "webp",
+  "pdf",
+  "heic",
+  "heif",
+  "bmp",
+  "tiff",
+  "tif",
+]);
+
+/**
+ * Rename a File before upload so the backend stores a safe GCS object key.
+ * Commas/spaces in names like "Costco - Feb 27, 2026.pdf" break comma-separated
+ * receipt_image fields and can produce un-fetchable CDN URLs.
+ */
+export function sanitizeUploadFile(file) {
+  if (!file) return file;
+  const original = file.name || "";
+  const dotIdx = original.lastIndexOf(".");
+  const rawExt = dotIdx >= 0 ? original.slice(dotIdx + 1).toLowerCase() : "";
+  const ext = SAFE_UPLOAD_EXTENSIONS.has(rawExt)
+    ? rawExt
+    : file.type === "application/pdf"
+      ? "pdf"
+      : "jpg";
+  const ts = Date.now();
+  const rnd = Math.random().toString(36).slice(2, 8);
+  const safeName = `image_${ts}_${rnd}.${ext}`;
+  return new File([file], safeName, {
+    type: file.type,
+    lastModified: file.lastModified,
+  });
+}
+
+/** True for an HEIC/HEIF file (by MIME or extension — iPhone HEICs often report an empty MIME). */
+export function isHeicFile(file) {
+  if (!file) return false;
+  const type = (file.type || "").toLowerCase();
+  if (type === "image/heic" || type === "image/heif") return true;
+  const name = (file.name || "").toLowerCase();
+  return name.endsWith(".heic") || name.endsWith(".heif");
+}
+
+// The upload endpoint rejects bodies over ~2 MB (HTTP 500) and Vercel rejects
+// anything over 4.5 MB (HTTP 413). Phone camera photos are routinely 3-10 MB.
+const MAX_UPLOAD_BYTES = 1.8 * 1024 * 1024;
+const MAX_UPLOAD_DIMENSION = 2400;
+
+async function loadDrawable(file) {
+  if (typeof createImageBitmap === "function") {
+    try {
+      return await createImageBitmap(file, { imageOrientation: "from-image" });
+    } catch {
+      /* fall through to <img> */
+    }
+  }
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(img);
+    };
+    img.onerror = (e) => {
+      URL.revokeObjectURL(url);
+      reject(e);
+    };
+    img.src = url;
+  });
+}
+
+/**
+ * Shrink a large raster image (re-encoded as JPEG) so it fits under the upload
+ * limit. Small images, PDFs, GIFs and anything that fails to decode pass through
+ * unchanged.
+ */
+export async function compressImageIfNeeded(file, maxBytes = MAX_UPLOAD_BYTES) {
+  if (!file || file.size <= maxBytes) return file;
+  const type = (file.type || "").toLowerCase();
+  if (!type.startsWith("image/") || type === "image/gif" || type === "image/svg+xml") {
+    return file;
+  }
+  try {
+    const drawable = await loadDrawable(file);
+    const srcW = drawable.width || drawable.naturalWidth;
+    const srcH = drawable.height || drawable.naturalHeight;
+    if (!srcW || !srcH) return file;
+
+    let scale = Math.min(1, MAX_UPLOAD_DIMENSION / Math.max(srcW, srcH));
+    let quality = 0.85;
+    let best = null;
+    for (let attempt = 0; attempt < 7; attempt++) {
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(srcW * scale));
+      canvas.height = Math.max(1, Math.round(srcH * scale));
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(drawable, 0, 0, canvas.width, canvas.height);
+      const blob = await new Promise((resolve) =>
+        canvas.toBlob(resolve, "image/jpeg", quality)
+      );
+      if (blob) best = blob;
+      if (blob && blob.size <= maxBytes) break;
+      quality = Math.max(0.5, quality - 0.1);
+      if (attempt >= 1) scale *= 0.85;
+    }
+    if (typeof drawable.close === "function") drawable.close();
+    if (!best || best.size >= file.size) return file;
+
+    const baseName = (file.name || "receipt").replace(/\.[^./\\]+$/, "");
+    return new File([best], `${baseName}.jpg`, {
+      type: "image/jpeg",
+      lastModified: file.lastModified || Date.now(),
+    });
+  } catch (e) {
+    console.warn("Image compression failed; uploading original file:", e);
+    return file;
+  }
+}
+
+/**
+ * Prepare an image for upload: convert HEIC/HEIF to JPEG so it displays in every
+ * browser and can be attached in QuickBooks (which does not accept HEIC), then
+ * shrink anything over the upload size limit. heic2any is loaded on demand so it
+ * never bloats the main bundle. If a step fails, the file is passed through.
+ */
+export async function convertHeicToJpegIfNeeded(file) {
+  let prepared = file;
+  if (isHeicFile(file)) {
+    try {
+      const heic2any = (await import("heic2any")).default;
+      const converted = await heic2any({ blob: file, toType: "image/jpeg", quality: 0.9 });
+      const out = Array.isArray(converted) ? converted[0] : converted;
+      const baseName = (file.name || "receipt").replace(/\.(heic|heif)$/i, "");
+      prepared = new File([out], `${baseName}.jpg`, {
+        type: "image/jpeg",
+        lastModified: file.lastModified || Date.now(),
+      });
+    } catch (e) {
+      console.error("HEIC→JPEG conversion failed; uploading original file:", e);
+      return file;
+    }
+  }
+  return compressImageIfNeeded(prepared);
+}
+
+export function getPdfProxyUrl(url) {
+  if (!url || typeof url !== "string") return "";
+  const trimmed = url.trim();
+  if (!trimmed) return "";
+  if (trimmed.startsWith("data:")) return trimmed;
+  if (trimmed.includes("pdf_proxy_base.php")) return trimmed;
+  return PDF_PROXY_BASE + encodeURIComponent(trimmed);
+}
+
+export function isPdfUrl(url) {
+  if (!url || typeof url !== "string") return false;
+  return (
+    /\.pdf(\?|$)/i.test(url) || /^data:application\/pdf/i.test(url)
+  );
+}
+
+/** Email / forwarded receipts keep server media as-is. */
+export function isProtectedReceiptMedia(receipt) {
+  if (!receipt) return false;
+  const hasIncomingEmailId =
+    receipt.fk_incoming_email_id &&
+    receipt.fk_incoming_email_id !== "0" &&
+    receipt.fk_incoming_email_id !== 0;
+  const isForwardedReceipt =
+    receipt.receipt_forwarded === "1" || receipt.receipt_forwarded === 1;
+  return !!(hasIncomingEmailId || isForwardedReceipt);
+}
+
+/** Higher rank = newer receipt (wins duplicate media URLs). */
+export function receiptMediaRank(receipt) {
+  const createDate = parseInt(receipt?.create_date, 10) || 0;
+  const id = parseInt(receipt?.id, 10) || 0;
+  const createPart =
+    Number.isFinite(createDate) && createDate >= 1_000_000 ? createDate : 0;
+  const idPart = Number.isFinite(id) ? id : 0;
+  // Prefer create_date (when the receipt row was created) over product_date.
+  return createPart * 1e10 + idPart;
+}
+
+/**
+ * iOS sets a single receiptData.emailAttachmentURL on create/update.
+ * Web must send only URLs from the current upload session — never a cumulative
+ * uploadmediaV1 history list and never another receipt's attachment field.
+ */
+export function buildSessionEmailAttachmentForApi(sources) {
+  const urls = [];
+  const push = (candidate) => {
+    splitMediaField(candidate).forEach((url) => {
+      if (url && !urls.includes(url)) urls.push(url);
+    });
+  };
+
+  if (Array.isArray(sources)) {
+    sources.forEach((item) => {
+      if (Array.isArray(item)) item.forEach((u) => push(u));
+      else push(item);
+    });
+  } else {
+    push(sources);
+  }
+
+  if (urls.length === 0) return "0";
+  return buildCombinedMediaField(urls);
+}
+
+/** Ordered unique media URLs from a receipt's image fields. */
+export function collectReceiptMediaUrls(receipt) {
+  if (!receipt) return [];
+  const ordered = [];
+  const seen = new Set();
+  [...splitMediaField(receipt.emailAttachment), ...splitMediaField(receipt.receipt_image)].forEach(
+    (url) => {
+      if (!url || seen.has(url)) return;
+      seen.add(url);
+      ordered.push(url);
+    }
+  );
+
+  // Some email-ingestion flows persist the same PDF twice:
+  //   1) as an email-server attachment URL (categorizr.com/emailserver/attechment_images/...)
+  //   2) as the underlying stored file (storage.googleapis.com/.../mediafiles/...)
+  // The web UI should prefer the stored URL and hide the proxy attachment duplicate.
+  return dedupeEmailAttachmentPdfUrls(ordered);
+}
+
+/**
+ * If both the email-server attachment proxy PDF and the underlying stored GCS PDF
+ * exist for the same receipt, hide the proxy one.
+ *
+ * This doesn't try to prove "same content"; it implements a safe preference rule:
+ * when we can display the GCS-backed file, the UI should not show an additional
+ * emailserver proxy copy alongside it.
+ */
+export function dedupeEmailAttachmentPdfUrls(urls) {
+  if (!Array.isArray(urls) || urls.length === 0) return urls;
+
+  const hasGcsStoredPdf = urls.some(
+    (u) =>
+      isPdfUrl(u) &&
+      /storage\.googleapis\.com\/.*\/mediafiles\//i.test(u) &&
+      /shared/gi.test(u) === false // keep this matcher narrow; ignore unrelated google storage URLs
+  );
+
+  if (!hasGcsStoredPdf) return urls;
+
+  const filtered = urls.filter((u) => {
+    if (!isPdfUrl(u)) return true;
+    return !/\/emailserver\/(?:attechment_images|attachment_images)\//i.test(u);
+  });
+
+  // If filtering would remove everything, fall back to the original list.
+  return filtered.length > 0 ? filtered : urls;
+}
+
+/**
+ * When uploadmediaV1 pollutes older receipts, the same CDN URL can appear on
+ * multiple receipts. Assign each URL to the newest receipt (by id, then date).
+ */
+/** Stable key for comparing a receipt's media fields before/after dedupe. */
+export function receiptMediaStorageKey(receipt) {
+  if (!receipt) return "";
+  const attachment = buildCombinedMediaField(collectReceiptMediaUrls(receipt));
+  const image =
+    receipt.receipt_image &&
+    receipt.receipt_image.toString().trim() !== "" &&
+    receipt.receipt_image !== "0"
+      ? normalizeMediaUrl(receipt.receipt_image)
+      : "0";
+  return `${attachment}|${image}`;
+}
+
+/**
+ * After cross-receipt dedupe, return the emailAttachment / receipt_image values
+ * that should be sent to updateReceiptv1 for one receipt.
+ */
+export function resolveReceiptMediaFieldsForApi(receiptId, updates, allReceipts) {
+  if (!receiptId || !Array.isArray(allReceipts)) {
+    return { emailAttachment: "0", receipt_image: "0" };
+  }
+
+  const idStr = receiptId.toString();
+  const mergedList = allReceipts.map((r) =>
+    r?.id?.toString() === idStr ? { ...r, ...(updates || {}) } : r
+  );
+  const deduped = dedupeReceiptMediaAcrossReceipts(mergedList);
+  const row = deduped.find((r) => r?.id?.toString() === idStr);
+
+  if (!row) {
+    return { emailAttachment: "0", receipt_image: "0" };
+  }
+
+  return {
+    emailAttachment: row.emailAttachment ?? "0",
+    receipt_image: row.receipt_image ?? "0",
+  };
+}
+
+// ── Split-media families ────────────────────────────────────────────────────
+// A split family is the set of receipt ids that INTENTIONALLY share the same media:
+// the original receipt plus the split children created from it. It is recorded (in
+// localStorage) at split time so the media dedup below keeps the shared image on ALL of
+// them, instead of resolving each URL to a single owner and blanking the rest.
+//
+// We key on plain receipt ids — NOT fk_original_receipt_id, which carries network-forward
+// semantics — so giving splits a shared image never affects forwarding. The 60-second
+// create-window heuristic can't cover this case: the backend stamps its own create_date on
+// new receipts, so a child split from an OLD original is always far outside the window.
+const SPLIT_FAMILIES_KEY = "cat_split_media_families";
+
+// Merge families that share any id into one (connected components). Re-splitting a
+// receipt records a new family that overlaps the previous one (both contain the parent);
+// without merging, the parent would belong to only its LAST family and the dedup could
+// blank the shared image on members of the earlier family. Merging keeps the original +
+// ALL its split descendants in one family, so every member keeps the image.
+function mergeConnectedFamilies(list) {
+  const fams = (list || [])
+    .filter((f) => Array.isArray(f))
+    .map((f) => new Set(f.map((x) => String(x))));
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (let i = 0; i < fams.length; i++) {
+      for (let j = i + 1; j < fams.length; j++) {
+        if ([...fams[j]].some((id) => fams[i].has(id))) {
+          fams[j].forEach((id) => fams[i].add(id));
+          fams.splice(j, 1);
+          changed = true;
+          j--;
+        }
+      }
+    }
+  }
+  return fams.map((s) => [...s]);
+}
+
+export function recordSplitMediaFamily(ids) {
+  try {
+    const clean = [
+      ...new Set((ids || []).map((x) => String(x)).filter((x) => x && x !== "0")),
+    ];
+    if (clean.length < 2) return;
+    const raw = JSON.parse(localStorage.getItem(SPLIT_FAMILIES_KEY) || "[]");
+    const list = Array.isArray(raw) ? raw : [];
+    list.push(clean);
+    // Merge overlapping families (re-split of the same receipt) so the parent and all its
+    // split descendants stay in ONE family and every member keeps the shared image.
+    const merged = mergeConnectedFamilies(list);
+    // Bound the registry so it can't grow without limit.
+    localStorage.setItem(SPLIT_FAMILIES_KEY, JSON.stringify(merged.slice(-300)));
+  } catch {
+    /* localStorage unavailable / quota — dedup simply falls back to the 60s window */
+  }
+}
+
+// receiptId → family index, for O(1) "are these two in the same split family?" checks.
+function loadSplitFamilyMap() {
+  const map = new Map();
+  try {
+    const raw = JSON.parse(localStorage.getItem(SPLIT_FAMILIES_KEY) || "[]");
+    (Array.isArray(raw) ? raw : []).forEach((family, i) => {
+      (Array.isArray(family) ? family : []).forEach((id) => map.set(String(id), i));
+    });
+  } catch {
+    /* ignore */
+  }
+  return map;
+}
+
+export function dedupeReceiptMediaAcrossReceipts(receipts) {
+  if (!Array.isArray(receipts) || receipts.length <= 1) return receipts;
+  const splitFamilyMap = loadSplitFamilyMap();
+
+  const urlOwner = new Map();
+  // url → all receipt indices and create_dates that have it
+  const urlAllIndices = new Map();
+
+  receipts.forEach((receipt, index) => {
+    const rank = receiptMediaRank(receipt);
+    collectReceiptMediaUrls(receipt).forEach((url) => {
+      const prev = urlOwner.get(url);
+      if (
+        !prev ||
+        rank > prev.rank ||
+        (rank === prev.rank && index > prev.index)
+      ) {
+        urlOwner.set(url, { rank, index, createDate: parseInt(receipt?.create_date, 10) || 0 });
+      }
+      if (!urlAllIndices.has(url)) urlAllIndices.set(url, []);
+      urlAllIndices.get(url).push({ index, createDate: parseInt(receipt?.create_date, 10) || 0 });
+    });
+  });
+
+    return receipts.map((receipt, index) => {
+    const receiptCreateDate = parseInt(receipt?.create_date, 10) || 0;
+    const owned = collectReceiptMediaUrls(receipt).filter((url) => {
+      const owner = urlOwner.get(url);
+      if (!owner) return false;
+      if (owner.index === index) return true;
+      // Receipts created within 60 seconds of each other are likely intentional splits
+      // sharing the same image — allow them to all keep the URL.
+      if (receiptCreateDate > 0 && owner.createDate > 0 &&
+          Math.abs(receiptCreateDate - owner.createDate) <= 60) {
+        return true;
+      }
+      // Recorded split family: the original + its split children intentionally share this
+      // image, so every family member keeps it regardless of create_date.
+      const selfId = String(receipt?.id ?? "");
+      const ownerId = String(receipts[owner.index]?.id ?? "");
+      const selfFam = splitFamilyMap.get(selfId);
+      if (selfFam !== undefined && selfFam === splitFamilyMap.get(ownerId)) {
+        return true;
+      }
+      // Same merchant sharing the exact same uploaded image URL is an intentional split
+      // (a parent and its split children/remainder). Two unrelated receipts never share the
+      // identical uploaded-media URL, so keep it for every same-store member. This is derived
+      // from server data (storeName), so it survives logout — unlike the localStorage split
+      // family above, whose loss was blanking parent/older split receipts after re-login.
+      const norm = (s) => String(s ?? "").trim().toLowerCase();
+      const selfStore = norm(receipt?.storeName ?? receipt?.store_name);
+      const ownerStore = norm(
+        receipts[owner.index]?.storeName ?? receipts[owner.index]?.store_name
+      );
+      if (selfStore && selfStore === ownerStore) {
+        return true;
+      }
+      return false;
+    });
+
+    const hadReceiptImageUrl =
+      receipt.receipt_image &&
+      receipt.receipt_image.toString().trim() !== "" &&
+      receipt.receipt_image !== "0";
+
+    if (owned.length === 0) {
+      return { ...receipt, receipt_image: "0", emailAttachment: "0" };
+    }
+
+    const emailAttachment = buildCombinedMediaField(owned);
+    const receipt_image =
+      hadReceiptImageUrl && owned.length === 1 ? owned[0] : "0";
+
+    return { ...receipt, receipt_image, emailAttachment };
+  });
+}
